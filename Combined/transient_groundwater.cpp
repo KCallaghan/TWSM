@@ -52,6 +52,8 @@ struct FanDarcyPack {
     double y = 0;
   };
   #define CUDA_FUNCTION_PREFIXES
+  #define max std::max
+  #define min std::min
 #else
   #define CUDA_FUNCTION_PREFIXES __device__ __host__
 #endif
