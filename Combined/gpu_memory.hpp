@@ -1,6 +1,6 @@
 #pragma once
 
-#include "error_handling.hpp"
+#include "gpu_error_handling.hpp"
 
 //Allocate `count` items in page-locked memory
 template<class T>

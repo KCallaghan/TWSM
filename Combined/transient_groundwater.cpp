@@ -5,11 +5,9 @@
 #include "transient_groundwater.hpp"
 
 #ifdef USE_CUDA
-#include <thrust/device_vector.hpp>
+#include <thrust/device_vector.h>
 #include "gpu_memory.hpp"
 #endif
-
-const double FP_ERROR = 1e-4;
 
 ///////////////////////
 // PRIVATE FUNCTIONS //
@@ -36,12 +34,14 @@ struct FanDarcyPack {
   double      cellsize_n_s_metres;
   f2d_pointer fdepth;
   ui82d_pointer land_mask;
+  f2d_pointer ksat;
   f2d_pointer porosity;
   f2d_pointer topo;
   f2d_pointer transmissivity;
   f2d_pointer wtd;
   f2d_pointer wtd_changed;
   int         width;
+  double      deltat;
 };
 
 
@@ -51,13 +51,14 @@ struct FanDarcyPack {
     double x = 0;
     double y = 0;
   };
-  #define __device__
-  #define __host__
+  #define CUDA_FUNCTION_PREFIXES
+#else
+  #define CUDA_FUNCTION_PREFIXES __device__ __host__
 #endif
 
 
 
-__device__ _host__ double that_one_equation(
+CUDA_FUNCTION_PREFIXES double that_one_equation(
   const double fdepth,
   const double wtd,
   const double volume,
@@ -73,7 +74,7 @@ __device__ _host__ double that_one_equation(
 
 
 
-__device__ _host__ double depthIntegratedTransmissivity(
+CUDA_FUNCTION_PREFIXES double depthIntegratedTransmissivity(
   const double wtd,
   const double fdepth,
   const double ksat
@@ -102,7 +103,7 @@ __device__ _host__ double depthIntegratedTransmissivity(
 
 
 
-__device__ _host__ double that_basic_diffusion_thing(
+CUDA_FUNCTION_PREFIXES double that_basic_diffusion_thing(
   const double Dmax,
   const double cell_width,
   const double cell_height
@@ -115,7 +116,7 @@ __device__ _host__ double that_basic_diffusion_thing(
 
 
 
-__device__ _host__ double some_other_equation(
+CUDA_FUNCTION_PREFIXES double some_other_equation(
   const double capacity,
   const double fdepth,
   const double lower_edge,
@@ -130,7 +131,7 @@ __device__ _host__ double some_other_equation(
  *          "worst case" scenario highest transmissivity, combined with
  *          a porosity-based amplification factor.
  */
-__device__ _host__ double computeMaxStableTimeStep(
+CUDA_FUNCTION_PREFIXES double computeMaxStableTimeStep(
   const int x,
   const int y,
   const FanDarcyPack &fdp
@@ -140,26 +141,23 @@ __device__ _host__ double computeMaxStableTimeStep(
   // Transmissivity is an effective diffusivity
   // Use the highest transmissivity for this time-step calculation
 
-  const std::array<double,4> Tarray = {
-    c2d(fdp.transmissivity, x  , y+1),
-    c2d(fdp.transmissivity, x  , y-1),
-    c2d(fdp.transmissivity, x-1, y  ),
-    c2d(fdp.transmissivity, x+1, y  )
-  };
+  auto Dmax = c2d(fdp.transmissivity, x  , y+1);
+  Dmax = max(Dmax, c2d(fdp.transmissivity, x  , y-1));
+  Dmax = max(Dmax, c2d(fdp.transmissivity, x-1, y  ));
+  Dmax = max(Dmax, c2d(fdp.transmissivity, x+1, y  ));
 
-  const auto Dmax = *std::max_element(Tarray.begin(), Tarray.end());
   const auto dt_max_diffusion_basic = that_basic_diffusion_thing(Dmax, fdp.cellsize_e_w_metres[y], fdp.cellsize_n_s_metres);
 
   // Now let's add in the porosity differences
   // Porosity differences will AMPLIFY the WTD changes.
   // Let us choose a time step that is also based on the LOWEST porosity
   // (highest WTD change per water volume transfer)
-  auto PhiMin =             c2d(fdp.porosity, x  , y  ) ;
-  PhiMin = std::min(PhiMin, c2d(fdp.porosity, x+1, y  ));
-  PhiMin = std::min(PhiMin, c2d(fdp.porosity, x-1, y  ));
-  PhiMin = std::min(PhiMin, c2d(fdp.porosity, x  , y+1));
-  PhiMin = std::min(PhiMin, c2d(fdp.porosity, x  , y-1));
-  PhiMin = std::max(PhiMin, 0.2f); //Yes, we do want max
+  auto PhiMin =        c2d(fdp.porosity, x  , y  ) ;
+  PhiMin = min(PhiMin, c2d(fdp.porosity, x+1, y  ));
+  PhiMin = min(PhiMin, c2d(fdp.porosity, x-1, y  ));
+  PhiMin = min(PhiMin, c2d(fdp.porosity, x  , y+1));
+  PhiMin = min(PhiMin, c2d(fdp.porosity, x  , y-1));
+  PhiMin = max(PhiMin, 0.2f); //Yes, we do want max
 
   // Porosity is a linear amplifier of WTD change, and it amplifies change
   // in both the giving and receiving cells.
@@ -179,7 +177,7 @@ __device__ _host__ double computeMaxStableTimeStep(
  * @brief Calculates the change in water volume that occurs between
  * two cells, given the water-table depth flux between the two.
  */
-__device__ _host__ double calculateWaterVolume(
+CUDA_FUNCTION_PREFIXES double calculateWaterVolume(
   const float wtd_change,
   const float center_wtd,
   const float neighbour_wtd,
@@ -250,7 +248,7 @@ __device__ _host__ double calculateWaterVolume(
  * @brief Calculates water-table depth change in a cell that receives water,
  * given the change in the corresponding cell that gives water.
  */
-__device__ _host__ double computeNewWTDGain(
+CUDA_FUNCTION_PREFIXES double computeNewWTDGain(
   const float volume,
   const float my_wtd,
   const float fdepth,
@@ -300,7 +298,7 @@ __device__ _host__ double computeNewWTDGain(
  * @brief Calculates water-table depth change in a cell that gives water,
  * given the change in the corresponding cell that receives water.
  */
-__device__ _host__ double computeNewWTDLoss(
+CUDA_FUNCTION_PREFIXES double computeNewWTDLoss(
   const float volume,
   const float my_wtd,
   const float fdepth,
@@ -336,7 +334,7 @@ __device__ _host__ double computeNewWTDLoss(
 
 
 
-__device__ _host__ double2 GainLoss(
+CUDA_FUNCTION_PREFIXES double2 GainLoss(
   const int x,  //Focal cell
   const int y,
   const int nx, //Neighbour cell
@@ -381,7 +379,7 @@ __device__ _host__ double2 GainLoss(
 
 
 //TODO: Maybe use this
-__device__ _host__ double2 computeWTDchangeWithNeighbour(
+CUDA_FUNCTION_PREFIXES double2 computeWTDchangeWithNeighbour(
   const int x,  //Focal cell coordinates
   const int y,
   const int nx, //Neighbour cell coordinates
@@ -425,11 +423,11 @@ __device__ _host__ double2 computeWTDchangeWithNeighbour(
  *        surrounding cells) and updates the class variables associated
  *        with these.
  */
-__device__ _host__ void computeWTDchangeAtCell(
+CUDA_FUNCTION_PREFIXES void computeWTDchangeAtCell(
   const int x,
   const int y,
   const double dt,
-  std::array<double,5> &local_wtd,
+  double local_wtd[5],
   const FanDarcyPack &fdp
 ){
   const int width = fdp.width;
@@ -514,7 +512,7 @@ __device__ _host__ void computeWTDchangeAtCell(
  * @brief Updates the wtd_depth_total array at a cell(x,y) using the
  * pre-set time step and dynamic time stepping within this as needed.
  */
-__device__ _host__ double updateCell(
+CUDA_FUNCTION_PREFIXES double updateCell(
   const int x,
   const int y,
   double time_remaining,
@@ -524,13 +522,13 @@ __device__ _host__ double updateCell(
 
   // Skip ocean cells
   if(c2d(fdp.land_mask,x,y) != 1)
-    return std::numeric_limits<double>::quiet_NaN();
+    return 0; //TODO: Is this the right value?
 
   // Runs functions to compute time steps and update WTD for the center cell
   // and its neighbours until the outer time step has been completed
 
   // Initial water-table depths, prior to updating
-  std::array<double, 5> local_wtd = {
+  double local_wtd[5] = {
     c2d(fdp.wtd, x  , y  ),
     c2d(fdp.wtd, x  , y+1),
     c2d(fdp.wtd, x  , y-1),
@@ -570,6 +568,7 @@ void UpdateCPU(const Parameters &params, ArrayPack &arp){
   fdp.cellsize_e_w_metres = arp.cellsize_e_w_metres.data();
   fdp.cellsize_n_s_metres = params.cellsize_n_s_metres;
   fdp.fdepth              = arp.fdepth.data();
+  fdp.ksat                = arp.ksat.data();
   fdp.land_mask           = arp.land_mask.data();
   fdp.porosity            = arp.porosity.data();
   fdp.topo                = arp.topo.data();
@@ -617,20 +616,23 @@ struct HostSideFanDarcyPark {
   thrust::device_vector<double>  cell_area;
   thrust::device_vector<double>  cellsize_e_w_metres;
   thrust::device_vector<float>   fdepth;
-  thurst::device_vector<uint8_t> land_mask;
+  thrust::device_vector<float>   ksat;
+  thrust::device_vector<uint8_t> land_mask;
   thrust::device_vector<float>   porosity;
   thrust::device_vector<float>   topo;
   thrust::device_vector<float>   transmissivity;
   thrust::device_vector<float>   wtd;
   thrust::device_vector<float>   wtd_changed;
+  FanDarcyPack *d_fdp;
   double cellsize_n_s_metres;
   int    width;
 
-  FanDarcyPack(const Parameters &params, ArrayPack &arp){
+  HostSideFanDarcyPark(const Parameters &params, ArrayPack &arp){
     //TODO: Copy only those things that need to go to the GPU only once
     cell_area.resize           (arp.cell_area.size());
     cellsize_e_w_metres.resize (arp.cellsize_e_w_metres.size());
     fdepth.resize              (arp.fdepth.size());
+    ksat.resize                (arp.ksat.size());
     land_mask.resize           (arp.land_mask.size());
     porosity.resize            (arp.porosity.size());
     topo.resize                (arp.topo.size());
@@ -639,22 +641,30 @@ struct HostSideFanDarcyPark {
     wtd_changed.resize         (arp.wtd_changed.size());
 
     //Copy all memory to the GPU (TODO: Don't recopy things that don't change)
-    thrust::copy(arp.cell_area.data(),           arp.cell_area.resize.data()              + arp.cell_area.resize.size(),              cell_area          );
-    thrust::copy(arp.cellsize_e_w_metres.data(), params.cellsize_e_w_metres.resize.data() + params.cellsize_e_w_metres.resize.size(), cellsize_e_w_metres);
-    thrust::copy(arp.fdepth.data(),              arp.fdepth.resize.data()                 + arp.fdepth.resize.size(),                 fdepth             );
-    thrust::copy(arp.land_mask.data(),           arp.land_mask.resize.data()              + arp.land_mask.resize.size(),              land_mask          );
-    thrust::copy(arp.porosity.data(),            arp.porosity.resize.data()               + arp.porosity.resize.size(),               porosity           );
-    thrust::copy(arp.topo.data(),                arp.topo.resize.data()                   + arp.topo.resize.size(),                   topo               );
-    thrust::copy(arp.transmissivity.data(),      arp.transmissivity.resize.data()         + arp.transmissivity.resize.size(),         transmissivity     );
-    thrust::copy(arp.wtd.data(),                 arp.wtd.resize.data()                    + arp.wtd.resize.size(),                    wtd                );
-    thrust::copy(arp.wtd_changed.data(),         arp.wtd_changed.resize.data()            + arp.wtd_changed.resize.size(),            wtd_changed        );
+    thrust::copy_n(arp.cell_area.data(),           arp.cell_area.size(),           cell_area.begin()          );
+    thrust::copy_n(arp.cellsize_e_w_metres.data(), arp.cellsize_e_w_metres.size(), cellsize_e_w_metres.begin());
+    thrust::copy_n(arp.fdepth.data(),              arp.fdepth.size(),              fdepth.begin()             );
+    thrust::copy_n(arp.ksat.data(),                arp.ksat.size(),                ksat.begin()               );
+    thrust::copy_n(arp.land_mask.data(),           arp.land_mask.size(),           land_mask.begin()          );
+    thrust::copy_n(arp.porosity.data(),            arp.porosity.size(),            porosity.begin()           );
+    thrust::copy_n(arp.topo.data(),                arp.topo.size(),                topo.begin()               );
+    thrust::copy_n(arp.transmissivity.data(),      arp.transmissivity.size(),      transmissivity.begin()     );
+    thrust::copy_n(arp.wtd.data(),                 arp.wtd.size(),                 wtd.begin()                );
+    thrust::copy_n(arp.wtd_changed.data(),         arp.wtd_changed.size(),         wtd_changed.begin()        );
+
+    RCHECKCUDAERROR(cudaMalloc(&d_fdp, sizeof(FanDarcyPack)));
   }
 
-  FanDarcyPack convert(const Parameters &params, ArrayPack &arp){
+  ~HostSideFanDarcyPark(){
+    RCHECKCUDAERROR(cudaFree(d_fdp));
+  }
+
+  FanDarcyPack* convert(const Parameters &params, ArrayPack &arp){
     //Resize: Should only be expensive the first time this is called
     cell_area.resize           (arp.cell_area.size());
     cellsize_e_w_metres.resize (arp.cellsize_e_w_metres.size());
     fdepth.resize              (arp.fdepth.size());
+    ksat.resize                (arp.ksat.size());
     land_mask.resize           (arp.land_mask.size());
     porosity.resize            (arp.porosity.size());
     topo.resize                (arp.topo.size());
@@ -663,63 +673,68 @@ struct HostSideFanDarcyPark {
     wtd_changed.resize         (arp.wtd_changed.size());
 
     //Copy all memory to the GPU (TODO: Don't recopy things that don't change)
-    thrust::copy(arp.cell_area.data(),           arp.cell_area.resize.data()              + arp.cell_area.resize.size(),              cell_area          );
-    thrust::copy(arp.cellsize_e_w_metres.data(), params.cellsize_e_w_metres.resize.data() + params.cellsize_e_w_metres.resize.size(), cellsize_e_w_metres);
-    thrust::copy(arp.fdepth.data(),              arp.fdepth.resize.data()                 + arp.fdepth.resize.size(),                 fdepth             );
-    thrust::copy(arp.land_mask.data(),           arp.land_mask.resize.data()              + arp.land_mask.resize.size(),              land_mask          );
-    thrust::copy(arp.porosity.data(),            arp.porosity.resize.data()               + arp.porosity.resize.size(),               porosity           );
-    thrust::copy(arp.topo.data(),                arp.topo.resize.data()                   + arp.topo.resize.size(),                   topo               );
-    thrust::copy(arp.transmissivity.data(),      arp.transmissivity.resize.data()         + arp.transmissivity.resize.size(),         transmissivity     );
-    thrust::copy(arp.wtd.data(),                 arp.wtd.resize.data()                    + arp.wtd.resize.size(),                    wtd                );
-    thrust::copy(arp.wtd_changed.data(),         arp.wtd_changed.resize.data()            + arp.wtd_changed.resize.size(),            wtd_changed        );
+    thrust::copy_n(arp.cell_area.data(),           arp.cell_area.size(),           cell_area.begin()          );
+    thrust::copy_n(arp.cellsize_e_w_metres.data(), arp.cellsize_e_w_metres.size(), cellsize_e_w_metres.begin());
+    thrust::copy_n(arp.fdepth.data(),              arp.fdepth.size(),              fdepth.begin()             );
+    thrust::copy_n(arp.ksat.data(),                arp.ksat.size(),                ksat.begin()               );
+    thrust::copy_n(arp.land_mask.data(),           arp.land_mask.size(),           land_mask.begin()          );
+    thrust::copy_n(arp.porosity.data(),            arp.porosity.size(),            porosity.begin()           );
+    thrust::copy_n(arp.topo.data(),                arp.topo.size(),                topo.begin()               );
+    thrust::copy_n(arp.transmissivity.data(),      arp.transmissivity.size(),      transmissivity.begin()     );
+    thrust::copy_n(arp.wtd.data(),                 arp.wtd.size(),                 wtd.begin()                );
+    thrust::copy_n(arp.wtd_changed.data(),         arp.wtd_changed.size(),         wtd_changed.begin()        );
 
     //Convert everything to pointers
     FanDarcyPack fdp;
-    fdp.cell_area           = thrust::raw_pointer_cast(arp.cell_area);
-    fdp.cellsize_e_w_metres = thrust::raw_pointer_cast(params.cellsize_e_w_metres);
-    fdp.fdepth              = thrust::raw_pointer_cast(arp.fdepth);
-    fdp.land_mask           = thrust::raw_pointer_cast(arp.land_mask);
-    fdp.porosity            = thrust::raw_pointer_cast(arp.porosity);
-    fdp.topo                = thrust::raw_pointer_cast(arp.topo);
-    fdp.transmissivity      = thrust::raw_pointer_cast(arp.transmissivity);
-    fdp.wtd                 = thrust::raw_pointer_cast(arp.wtd);
-    fdp.wtd_changed         = thrust::raw_pointer_cast(arp.wtd_changed);
+    fdp.cell_area           = thrust::raw_pointer_cast(cell_area.data()          );
+    fdp.cellsize_e_w_metres = thrust::raw_pointer_cast(cellsize_e_w_metres.data());
+    fdp.fdepth              = thrust::raw_pointer_cast(fdepth.data()             );
+    fdp.ksat                = thrust::raw_pointer_cast(ksat.data()               );
+    fdp.land_mask           = thrust::raw_pointer_cast(land_mask.data()          );
+    fdp.porosity            = thrust::raw_pointer_cast(porosity.data()           );
+    fdp.topo                = thrust::raw_pointer_cast(topo.data()               );
+    fdp.transmissivity      = thrust::raw_pointer_cast(transmissivity.data()     );
+    fdp.wtd                 = thrust::raw_pointer_cast(wtd.data()                );
+    fdp.wtd_changed         = thrust::raw_pointer_cast(wtd_changed.data()        );
     fdp.cellsize_n_s_metres = params.cellsize_n_s_metres;
-    fdp.width               = params.width;
+    fdp.width               = arp.topo.width();
+    fdp.deltat              = params.deltat;
 
-    return fdp;
+    RCHECKCUDAERROR(cudaMemcpy(d_fdp, &fdp, sizeof(FanDarcyPack), cudaMemcpyHostToDevice));
+
+    return d_fdp;
   }
 };
 
 
 
-__global__ gpu_depthIntegratedTransmissivity(FanDarcyPack *fdp, const int width, const int height){
+__global__ void gpu_depthIntegratedTransmissivity(FanDarcyPack *fdp, const int width, const int height){
   //Grid strided loops
-  for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < N; i += blockDim.x * gridDim.x){
+  for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < width*height; i += blockDim.x * gridDim.x){
     const int x = i%width;
     const int y = i/width;
 
     if(x==1 || y==1 || x==width-1 || y==height-1)
       continue;
 
-    c2d(fdp.transmissivity,x,y) = depthIntegratedTransmissivity(
-      c2d(fdp.wtd,x,y),
-      c2d(fdp.fdepth,x,y),
-      c2d(fdp.ksat,x,y)
+    c2d(fdp->transmissivity,x,y) = depthIntegratedTransmissivity(
+      c2d(fdp->wtd,x,y),
+      c2d(fdp->fdepth,x,y),
+      c2d(fdp->ksat,x,y)
     );
   }
 }
 
-__global__ gpu_updateCell(FanDarcyPack *fdp, const int width, const int height){
+__global__ void gpu_updateCell(FanDarcyPack *fdp, const int width, const int height){
   //Grid strided loops
-  for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < N; i += blockDim.x * gridDim.x){
+  for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < width*height; i += blockDim.x * gridDim.x){
     const int x = i%width;
     const int y = i/width;
 
     if(x==1 || y==1 || x==width-1 || y==height-1)
       continue;
 
-    c2d(fdp.wtd_changed,x,y) = updateCell(x, y, fdp->deltat, fdp);
+    c2d(fdp->wtd_changed,x,y) = updateCell(x, y, fdp->deltat, *fdp);
   }
 }
 
@@ -727,14 +742,15 @@ void UpdateGPU(const Parameters &params, ArrayPack &arp){
   //Creates this object only once per program run
   static HostSideFanDarcyPark hsfdp(params, arp);
 
-  auto fdp = hsfdp.convert(params, arp);
+  auto d_fdp = hsfdp.convert(params, arp);
 
-  const int width = params.width;
-  const int height = params.height;
+  //TODO: Is this the best place to get this info from?
+  const int width  = arp.topo.width();
+  const int height = arp.topo.height();
 
   //TODO: Adjust block sizes
-  gpu_depthIntegratedTransmissivity<<<200,128>>>(fdp, params.width, params.height);
-  gpu_updateCell<<<200,128>>>(fdp, params.width, params.height);
+  gpu_depthIntegratedTransmissivity<<<200,128>>>(d_fdp, width, height);
+  gpu_updateCell<<<200,128>>>(d_fdp, width, height);
 
   cudaDeviceSynchronize();
 

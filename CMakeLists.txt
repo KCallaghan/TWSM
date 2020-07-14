@@ -25,9 +25,9 @@ add_subdirectory(common/richdem)
 if(USE_CUDA)
   include(CheckLanguage)
   enable_language(CUDA)
-  set_source_files_properties(Combined/transient_groundwater.cu PROPERTIES LANGUAGE CUDA)
+  set_source_files_properties(Combined/transient_groundwater.cpp PROPERTIES LANGUAGE CUDA)
 else()
-  set_source_files_properties(Combined/transient_groundwater.cu PROPERTIES LANGUAGE CXX)
+  set_source_files_properties(Combined/transient_groundwater.cpp PROPERTIES LANGUAGE CXX)
 endif()
 
 
@@ -35,24 +35,24 @@ endif()
 add_executable(twsm.x
   Combined/ArrayPack.cpp
   Combined/parameters.cpp
-  Combined/transient_groundwater.cu
+  Combined/transient_groundwater.cpp
   Combined/TWSM.cpp
 )
 target_link_libraries(twsm.x PRIVATE richdem ${NETCDF_LIBRARIES} OpenMP::OpenMP_CXX)
-target_compile_features(twsm.x PRIVATE cxx_std_17)
+target_compile_features(twsm.x PRIVATE cxx_std_14)
 target_compile_definitions(twsm.x PRIVATE DOCTEST_CONFIG_DISABLE)
 if(USE_CUDA)
   target_compile_definitions(twsm.x PRIVATE USE_CUDA)
-endif()  
+endif()
 add_sanitizers(twsm.x)
 
 
 add_executable(unittests.x
   Combined/test_main.cpp
-  Combined/transient_groundwater.cu
+  Combined/transient_groundwater.cpp
 )
 target_link_libraries(unittests.x PRIVATE richdem ${NETCDF_LIBRARIES} OpenMP::OpenMP_CXX)
-target_compile_features(unittests.x PRIVATE cxx_std_17)
+target_compile_features(unittests.x PRIVATE cxx_std_14)
 
 
 
@@ -62,5 +62,5 @@ add_executable(dephier.x
   Combined/ArrayPack.cpp
 )
 target_link_libraries(dephier.x PRIVATE richdem ${NETCDF_LIBRARIES} OpenMP::OpenMP_CXX)
-target_compile_features(dephier.x PRIVATE cxx_std_17)
+target_compile_features(dephier.x PRIVATE cxx_std_14)
 add_sanitizers(dephier.x)
