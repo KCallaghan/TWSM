@@ -17,26 +17,39 @@ find_package(OpenMP)
 find_package(Sanitizers)
 # use -fsanitize=address (above) to check for memory errors
 
+option(USE_CUDA "Whether or not to enable GPU operations" OFF)
 
 add_subdirectory(common/richdem)
+
+
+if(USE_CUDA)
+  include(CheckLanguage)
+  enable_language(CUDA)
+  set_source_files_properties(Combined/transient_groundwater.cu PROPERTIES LANGUAGE CUDA)
+else()
+  set_source_files_properties(Combined/transient_groundwater.cu PROPERTIES LANGUAGE CXX)
+endif()
 
 
 
 add_executable(twsm.x
   Combined/ArrayPack.cpp
   Combined/parameters.cpp
-  Combined/transient_groundwater.cpp
+  Combined/transient_groundwater.cu
   Combined/TWSM.cpp
 )
 target_link_libraries(twsm.x PRIVATE richdem ${NETCDF_LIBRARIES} OpenMP::OpenMP_CXX)
 target_compile_features(twsm.x PRIVATE cxx_std_17)
 target_compile_definitions(twsm.x PRIVATE DOCTEST_CONFIG_DISABLE)
+if(USE_CUDA)
+  target_compile_definitions(twsm.x PRIVATE USE_CUDA)
+endif()  
 add_sanitizers(twsm.x)
 
 
 add_executable(unittests.x
   Combined/test_main.cpp
-  Combined/transient_groundwater.cpp
+  Combined/transient_groundwater.cu
 )
 target_link_libraries(unittests.x PRIVATE richdem ${NETCDF_LIBRARIES} OpenMP::OpenMP_CXX)
 target_compile_features(unittests.x PRIVATE cxx_std_17)
